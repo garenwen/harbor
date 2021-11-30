@@ -34,6 +34,7 @@ const (
 	RegistryTypeDTR              RegistryType = "dtr"
 	RegistryTypeTencentTcr       RegistryType = "tencent-tcr"
 	RegistryTypeGithubCR         RegistryType = "github-ghcr"
+	RegistryTypeBaiduCcr         RegistryType = "baidu-ccr"
 
 	RegistryTypeHelmHub     RegistryType = "helm-hub"
 	RegistryTypeArtifactHub RegistryType = "artifact-hub"
