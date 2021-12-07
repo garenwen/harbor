@@ -1,10 +1,11 @@
 package baiduccr
 
 import (
+	"github.com/goharbor/harbor/src/common/http/modifier"
 	"net/http"
 	"time"
 
-	"github.com/goharbor/harbor/src/common/http/modifier"
+	//"github.com/goharbor/harbor/src/common/http/modifier"
 	"github.com/goharbor/harbor/src/lib/log"
 )
 
@@ -13,81 +14,67 @@ type Credential modifier.Modifier
 
 var _ Credential = &baiduAuthCredential{}
 
-func (q *baiduAuthCredential) Modify(r *http.Request) (err error) {
-	log.Debugf("[baiduCCR.Modify before]Host: %v", r.Host)
-	if !q.isCacheTokenValid() {
-		err = q.getTempInstanceToken()
-		log.Debugf("baiduCCR.Modify.isCacheTokenValid.updateToken=%s, err=%v", q.cacheTokenExpiredAt, err)
-		if err != nil {
-			return
-		}
-	}
-	r.SetBasicAuth(q.cacheTokener.username, q.cacheTokener.token)
-	log.Debugf("[baiduCCR.Modify]Host: %v, header: %#v", r.Host, r.Header)
-	return
+// Implements interface Credential
+type baiduAuthCredential struct {
+	instanceID  string
+	clientCache *clientCache
+
+	username          string
+	password          string
+	passwordExpiredAt time.Time
 }
 
-func (q *baiduAuthCredential) isCacheTokenValid() (ok bool) {
-	log.Debugf("[]baiduCCR.isCacheTokenValid: username: %s, expiredAt: %v", q.username, q.cacheTokenExpiredAt)
-	if &q.cacheTokenExpiredAt == nil {
-		return
+// NewAuth ...
+func NewAuth(username, password string, instanceID string, clientCache *clientCache) *baiduAuthCredential {
+	return &baiduAuthCredential{
+		instanceID:        instanceID,
+		clientCache:       clientCache,
+		username:          username,
+		password:          password,
+		passwordExpiredAt: time.Now().Add(time.Second),
 	}
-	if q.cacheTokener == nil {
-		return
+}
+
+func (q *baiduAuthCredential) Modify(r *http.Request) error {
+	if !q.isCacheTokenValid() {
+		if err := q.getTempInstanceToken(); err != nil {
+			log.Errorf("baidu-ccr.Modify.isCacheTokenValid.updateToken=%s, err=%v", q.passwordExpiredAt, err)
+			return err
+		}
+	}
+	r.SetBasicAuth(q.username, q.password)
+	log.Infof("[baidu-ccr.Modify after]Host: %v, header: %#v", r.Host, r.Header)
+	return nil
+}
+
+func (q *baiduAuthCredential) isCacheTokenValid() bool {
+	log.Infof("[]baidu-ccr.isCacheTokenValid: username: %s, expiredAt: %v", q.username, q.passwordExpiredAt)
+	if &q.passwordExpiredAt == nil {
+		return false
+	}
+	if q.password == "" {
+		return false
 	}
 	// refresh token in advanced
-	if time.Now().After(q.cacheTokenExpiredAt.Add(-1 * time.Minute)) {
-		return
+	if time.Now().After(q.passwordExpiredAt.Add(-1 * time.Minute)) {
+		return false
 	}
 	return true
 }
 
-// Implements interface Credential
-type baiduAuthCredential struct {
-	registryID          string
-	client              *cacheClient
-	username            string
-	cacheTokener        *temporaryTokener
-	cacheTokenExpiredAt time.Time
-}
-
-type temporaryTokener struct {
-	username string
-	token    string
-}
-
-// NewAuth ...
-func NewAuth(username, password string, registryID string, client *cacheClient) Credential {
-	return &baiduAuthCredential{
-		registryID: registryID,
-		client:     client,
-		username:   username,
-		cacheTokener: &temporaryTokener{
-			username: username,
-			token:    password,
-		},
-		cacheTokenExpiredAt: time.Now().Add(time.Second),
-	}
-}
-
-func (q *baiduAuthCredential) getTempInstanceToken() (err error) {
-	var cli *Client
-	cli, err = q.client.Get()
+func (q *baiduAuthCredential) getTempInstanceToken() error {
+	cli, err := q.clientCache.GetClient()
 	if err != nil {
 		return err
 	}
 
-	var passwd string
-	passwd, err = cli.CreateTemporyToken(q.registryID, 2)
+	password, err := cli.CreateTemporaryToken(q.instanceID, 2)
 	if err != nil {
 		return err
 	}
 
-	q.cacheTokenExpiredAt = time.Now().Add(2 * time.Hour)
-	q.cacheTokener = &temporaryTokener{
-		username: q.username,
-		token:    passwd,
-	}
+	q.password = password
+	q.passwordExpiredAt = time.Now().Add(2 * time.Hour)
 
-	return
+	return nil
 }

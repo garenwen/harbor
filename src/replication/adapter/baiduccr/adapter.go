@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	errInvalidccrEndpoint    error = errors.New("[baiduccr.newAdapter] Invalid TCR instance endpoint")
-	errPingccrEndpointFailed error = errors.New("[baiduccr.newAdapter] Ping TCR instance endpoint failed")
-	errInvalidccrCredential  error = errors.New("[baiduccr.newAdapter] Invalid CCR credential")
+	errInvalidCCREndpoint = errors.New("[baidu-ccr.newAdapter] Invalid baidu CCR instance endpoint")
+	//errPingCCREndpointFailed = errors.New("[baidu-ccr.newAdapter] Ping baidu CCR instance endpoint failed")
+	errInvalidCCRCredential = errors.New("[baidu-ccr.newAdapter] Invalid baidu CCR credential")
 )
 
 func init() {
@@ -55,11 +55,12 @@ func getAdapterInfo() *model.AdapterPattern {
 
 type adapter struct {
 	*native.Adapter
-	registryID *string
+	instanceID *string
 	regionName *string
-	cacheCli   *cacheClient
 	client     *commonhttp.Client
 	registry   *model.Registry
+
+	clientCache *clientCache
 }
 
 /**
@@ -68,46 +69,45 @@ type adapter struct {
 var _ adp.Adapter = &adapter{}
 
 func newAdapter(registry *model.Registry) (a *adapter, err error) {
-	// Query TCR instance info via endpoint.
+	// Query baidu CCR instance info via endpoint.
 	var registryURL *url.URL
 	registryURL, _ = url.Parse(registry.URL)
 
 	if !strings.HasSuffix(registryURL.Host, "baidubce.com") {
-		log.Errorf("[baiduccr.newAdapter] errInvalidCCREndpoint=%v", err)
-		return nil, errInvalidccrEndpoint
+		log.Errorf("[baidu-ccr.newAdapter] errInvalidCCREndpoint=%v", err)
+		return nil, errInvalidCCREndpoint
 	}
 
 	if registry.Credential == nil || registry.Credential.Type != model.CredentialTypeBasic {
-		err = errInvalidccrCredential
-		log.Errorf("[baiduccr.newAdapter] credential is in wrong type")
+		err = errInvalidCCRCredential
+		log.Errorf("[baidu-ccr.newAdapter] credential is in wrong type")
 		return
 	}
 
 	realm, service, err := ping(registry)
-	log.Debugf("[baiduccr.newAdapter] realm=%s, service=%s error=%v", realm, service, err)
 	if err != nil {
-		log.Errorf("[baiduccr.newAdapter] ping failed. error=%v", err)
+		log.Errorf("[baidu-ccr.newAdapter] ping failed. error=%v", err)
 		return
 	}
 
 	region := getRegionFromHost(registryURL.Host)
-	clusterID := getClusterIDFromHost(registryURL.Host)
-	cachedCli := newCacheClient(clusterID, registry.Credential.AccessKey, region)
+	instanceID := getInstanceIDFromHost(registryURL.Host)
+	clientCache := newClientCache(instanceID, registry.Credential.AccessKey, region)
 
-	var credential = NewAuth(registry.Credential.AccessKey, registry.Credential.AccessSecret, clusterID, cachedCli)
+	var credential = NewAuth(registry.Credential.AccessKey, registry.Credential.AccessSecret, instanceID, clientCache)
 	var transport = util.GetHTTPTransport(registry.Insecure)
 	var authorizer = bearer.NewAuthorizer(realm, service, credential, transport)
 
 	return &adapter{
-		registry:   registry,
-		registryID: &clusterID,
-		regionName: &region,
-		cacheCli:   cachedCli,
+		registry:    registry,
+		instanceID:  &instanceID,
+		regionName:  &region,
+		clientCache: clientCache,
 		client: commonhttp.NewClient(
 			&http.Client{
 				Transport: transport,
 			},
-			authorizer,
+			credential,
 		),
 		Adapter: native.NewAdapterWithAuthorizer(registry, authorizer),
 	}, nil
@@ -119,7 +119,6 @@ func ping(registry *model.Registry) (string, string, error) {
 	}
 
 	resp, err := client.Get(registry.URL + "/v2/")
-	log.Debugf("[baiduccr.ping] error=%v", err)
 	if err != nil {
 		return "", "", err
 	}
@@ -130,7 +129,7 @@ func ping(registry *model.Registry) (string, string, error) {
 			return challenge.Parameters["realm"], challenge.Parameters["service"], nil
 		}
 	}
-	return "", "", fmt.Errorf("[baiduccr.ping] bearer auth scheme isn't supported: %v", challenges)
+	return "", "", fmt.Errorf("[baidu-ccr.ping] bearer auth scheme isn't supported: %v", challenges)
 }
 
 func (a *adapter) Info() (info *model.RegistryInfo, err error) {
@@ -159,24 +158,22 @@ func (a *adapter) Info() (info *model.RegistryInfo, err error) {
 }
 
 func (a *adapter) PrepareForPush(resources []*model.Resource) (err error) {
-	log.Debugf("[baiduccr.PrepareForPush]")
 	for _, resource := range resources {
 		if resource == nil {
 			return errors.New("the resource cannot be null")
 		}
 		if resource.Metadata == nil {
-			return errors.New("[baiduccr.PrepareForPush] the metadata of resource cannot be null")
+			return errors.New("[baidu-ccr.PrepareForPush] the metadata of resource cannot be null")
 		}
 		if resource.Metadata.Repository == nil {
-			return errors.New("[baiduccr.PrepareForPush] the namespace of resource cannot be null")
+			return errors.New("[baidu-ccr.PrepareForPush] the namespace of resource cannot be null")
 		}
 		if len(resource.Metadata.Repository.Name) == 0 {
-			return errors.New("[baiduccr.PrepareForPush] the name of the namespace cannot be null")
+			return errors.New("[baidu-ccr.PrepareForPush] the name of the namespace cannot be null")
 		}
 		var paths = strings.Split(resource.Metadata.Repository.Name, "/")
 		var namespace = paths[0]
 
-		log.Debugf("[baiduccr.PrepareForPush.createPrivateNamespace] namespace=%s", namespace)
 		err = a.createPrivateNamespace(namespace)
 		if err != nil {
 			return
@@ -188,9 +185,9 @@ func (a *adapter) PrepareForPush(resources []*model.Resource) (err error) {
 }
 
 func (a *adapter) createPrivateNamespace(namespace string) error {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return errors.New(fmt.Sprintf("[baiduccr.createPrivateNamespace] get client failed: %s", err))
+		return errors.New(fmt.Sprintf("[baidu-ccr.createPrivateNamespace] get client failed: %s", err))
 	}
 
 	isExist, err := a.isNamespaceExists(namespace)
@@ -199,7 +196,7 @@ func (a *adapter) createPrivateNamespace(namespace string) error {
 	}
 
 	if !isExist {
-		return cli.CreateNamespace(*a.registryID, &CreateProjectRequest{
+		return cli.CreateNamespace(*a.instanceID, &CreateProjectRequest{
 			ProjectName: namespace,
 			Public:      "false",
 		})
@@ -209,12 +206,12 @@ func (a *adapter) createPrivateNamespace(namespace string) error {
 }
 
 func (a *adapter) isNamespaceExists(namespace string) (bool, error) {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return false, errors.New(fmt.Sprintf("[baiduccr.isNamespaceExists] get client failed: %s", err))
+		return false, errors.New(fmt.Sprintf("[baidu-ccr.isNamespaceExists] get client failed: %s", err))
 	}
 
-	_, err = cli.GetNamespace(*a.registryID, namespace)
+	_, err = cli.GetNamespace(*a.instanceID, namespace)
 	var bceErr *bce.BceServiceError
 	if err != nil && errors.As(err, &bceErr) {
 		if bceErr.StatusCode == http.StatusNotFound {
@@ -223,24 +220,24 @@ func (a *adapter) isNamespaceExists(namespace string) (bool, error) {
 	}
 
 	if err != nil {
-		return false, fmt.Errorf("[baiduccr.isNamespaceExists] get namespace failed: %w", err)
+		return false, fmt.Errorf("[baidu-ccr.isNamespaceExists] get namespace failed: %w", err)
 	}
 
 	return true, nil
 }
 
 func (a *adapter) listAllNamespaces() ([]string, error) {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("[baiduccr.listAllNamespaces] get client failed: %s", err))
+		return nil, errors.New(fmt.Sprintf("[baidu-ccr.listAllNamespaces] get client failed: %s", err))
 	}
 
 	pageNo, pageSize := 1, 100
 	result := make([]string, 0)
 	for {
-		resp, err := cli.ListNamespaces(*a.registryID, pageNo, pageSize)
+		resp, err := cli.ListNamespaces(*a.instanceID, pageNo, pageSize)
 		if err != nil {
-			return nil, fmt.Errorf("[baiduccr.listAllNamespaces] list namespaces: %w", err)
+			return nil, fmt.Errorf("[baidu-ccr.listAllNamespaces] list namespaces: %w", err)
 		}
 
 		if resp.Items == nil {
@@ -262,17 +259,17 @@ func (a *adapter) listAllNamespaces() ([]string, error) {
 }
 
 func (a *adapter) listReposByNamespace(namespace string) ([]*RepositoryResult, error) {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("[baiduccr.ListReposByNamespace] get client failed: %s", err))
+		return nil, errors.New(fmt.Sprintf("[baidu-ccr.ListReposByNamespace] get client failed: %s", err))
 	}
 
 	pageNo, pageSize := 1, 100
 	result := make([]*RepositoryResult, 0)
 	for {
-		resp, err := cli.ListReposByNamespace(*a.registryID, namespace, pageNo, pageSize)
+		resp, err := cli.ListReposByNamespace(*a.instanceID, namespace, pageNo, pageSize)
 		if err != nil {
-			return nil, fmt.Errorf("[baiduccr.ListReposByNamespace] list namespaces: %w", err)
+			return nil, fmt.Errorf("[baidu-ccr.ListReposByNamespace] list namespaces: %w", err)
 		}
 
 		if len(resp.Items) != 0 {
@@ -290,18 +287,18 @@ func (a *adapter) listReposByNamespace(namespace string) ([]*RepositoryResult, e
 }
 
 func (a *adapter) getImages(namespace, repo, tag string) ([]*TagResult, []string, error) {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("[baiduccr.getImages] get client failed: %s", err))
+		return nil, nil, errors.New(fmt.Sprintf("[baidu-ccr.getImages] get client failed: %s", err))
 	}
 
 	pageNo, pageSize := 1, 100
 	result := make([]*TagResult, 0)
 	images := make([]string, 0)
 	for {
-		resp, err := cli.GetImage(*a.registryID, namespace, repo, tag, pageNo, pageSize)
+		resp, err := cli.GetImage(*a.instanceID, namespace, repo, tag, pageNo, pageSize)
 		if err != nil {
-			return nil, nil, fmt.Errorf("[baiduccr.getImages] get image: %w", err)
+			return nil, nil, fmt.Errorf("[baidu-ccr.getImages] get image: %w", err)
 		}
 
 		if resp.Items == nil {
@@ -324,10 +321,10 @@ func (a *adapter) getImages(namespace, repo, tag string) ([]*TagResult, []string
 }
 
 func (a *adapter) deleteImage(namespace, repo, tag string) error {
-	cli, err := a.cacheCli.Get()
+	cli, err := a.clientCache.GetClient()
 	if err != nil {
-		return errors.New(fmt.Sprintf("[baiduccr.deleteImage] get client failed: %s", err))
+		return errors.New(fmt.Sprintf("[baidu-ccr.deleteImage] get client failed: %s", err))
 	}
 
-	return cli.DeleteImage(*a.registryID, namespace, repo, tag)
+	return cli.DeleteImage(*a.instanceID, namespace, repo, tag)
 }

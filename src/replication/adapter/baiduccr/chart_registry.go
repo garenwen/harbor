@@ -52,7 +52,7 @@ func (a *adapter) FetchCharts(filters []*model.Filter) (resources []*model.Resou
 	// 2. list repositories
 	for _, ns := range nms {
 		var url = fmt.Sprintf(chartListURL, a.registry.URL, ns)
-		var repositories = []*model.Repository{}
+		var repositories []*model.Repository
 		err = a.client.Get(url, &repositories)
 		log.Debugf("[baidu-ccr.FetchCharts] url=%s, namespace=%s, repositories=%v, error=%v", url, ns, repositories, err)
 		if err != nil {
@@ -115,7 +115,6 @@ func (a *adapter) FetchCharts(filters []*model.Filter) (resources []*model.Resou
 }
 
 func (a *adapter) ChartExist(name, version string) (exist bool, err error) {
-	log.Debugf("[baidu-ccr.ChartExist] name=%s version=%s", name, version)
 	_, err = a.getChartInfo(name, version)
 	// if not found, return not exist
 	if httpErr, ok := err.(*commonhttp.Error); ok && httpErr.Code == http.StatusNotFound {
@@ -129,21 +128,21 @@ func (a *adapter) ChartExist(name, version string) (exist bool, err error) {
 	return
 }
 
-func (a *adapter) getChartInfo(name, version string) (info *ccrChartVersionDetail, err error) {
+func (a *adapter) getChartInfo(name, version string) (*ccrChartVersionDetail, error) {
 	var namespace string
 	var chart string
-	namespace, chart, err = parseChartName(name)
+	namespace, chart, err := parseChartName(name)
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	var url = fmt.Sprintf(chartInfoURL, a.registry.URL, namespace, chart, version)
-	info = &ccrChartVersionDetail{}
-	err = a.client.Get(url, info)
-	if err != nil {
-		return
+	info := &ccrChartVersionDetail{}
+
+	if err = a.client.Get(url, info); err != nil {
+		return nil, err
 	}
-	return
+	return nil, err
 }
 
 func (a *adapter) DownloadChart(name, version, contentURL string) (rc io.ReadCloser, err error) {
@@ -155,7 +154,6 @@ func (a *adapter) DownloadChart(name, version, contentURL string) (rc io.ReadClo
 	if info.Metadata == nil || len(info.Metadata.URLs) == 0 || len(info.Metadata.URLs[0]) == 0 {
 		return nil, fmt.Errorf("[baidu-ccr.DownloadChart.NO_DOWNLOAD_URL] chart=%s:%s", name, version)
 	}
-
 	var url = strings.ToLower(info.Metadata.URLs[0])
 	// relative URL
 	if !(strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")) {

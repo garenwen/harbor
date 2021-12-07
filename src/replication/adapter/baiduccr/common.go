@@ -6,7 +6,6 @@ import (
 )
 
 const (
-	endpoint       = "ccr.gz.baidubce.com"
 	credentialPath = "/var/run/secrets/ccr/credential"
 )
 
@@ -18,7 +17,7 @@ func getEndpoint(region string) string {
 	return ep
 }
 
-func getClusterIDFromHost(host string) string {
+func getInstanceIDFromHost(host string) string {
 	if strings.HasPrefix(host, "http://") {
 		host = strings.TrimPrefix(host, "http://")
 	}
