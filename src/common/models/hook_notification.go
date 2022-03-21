@@ -26,7 +26,9 @@ type NotificationPolicy struct {
 	CreationTime time.Time     `orm:"column(creation_time);auto_now_add" json:"creation_time"`
 	UpdateTime   time.Time     `orm:"column(update_time);auto_now_add" json:"update_time"`
 	Enabled      bool          `orm:"column(enabled)" json:"enabled"`
-	Rule         string    `orm:"column(rule)" json:"rule"`
+	Namespace    string        `orm:"column(namespace)" json:"namespace"`
+	Registry     string        `orm:"column(registry)" json:"registry"`
+	Version      string        `orm:"column(version)" json:"version"`
 }
 
 // TableName set table name for ORM.
