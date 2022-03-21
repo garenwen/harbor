@@ -61,7 +61,6 @@ type Policy struct {
 	Enabled      bool      `json:"enabled"`
 	CreationTime time.Time `json:"creation_time"`
 	UpdateTime   time.Time `json:"update_time"`
-	Rule         string    `orm:"column(rule)" json:"rule"`
 }
 
 // Valid the policy
